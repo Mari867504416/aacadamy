@@ -332,3 +332,17 @@ app.post('/officer/reset-password', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+// After calculating the score
+fetch(`${BACKEND_URL}/submit-result`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    username: officerData.username,
+    name: officerData.name,
+    address: officerData.address,
+    score: score,
+    total: Object.keys(answers).length,
+    date: new Date().toISOString()
+  })
+});
+
