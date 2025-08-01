@@ -345,4 +345,46 @@ fetch(`${BACKEND_URL}/submit-result`, {
     date: new Date().toISOString()
   })
 });
+const Result = mongoose.model('Result', new mongoose.Schema({
+  username: { type: String, required: true },
+  name: String,
+  phone: String,
+  score: Number,
+  total: Number,
+  date: { type: Date, default: Date.now }
+}));
+app.post('/submit-result', async (req, res) => {
+  try {
+    const { username, name, phone, score, total, date } = req.body;
+
+    if (!username || score == null || total == null) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const newResult = new Result({
+      username,
+      name: name || "Unknown",
+      phone: phone || "Not Provided",
+      score,
+      total,
+      date: date ? new Date(date) : new Date()
+    });
+
+    await newResult.save();
+    res.json({ message: 'Result submitted successfully' });
+  } catch (error) {
+    console.error('Submit result error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+app.get('/get-results', async (req, res) => {
+  try {
+    const results = await Result.find().sort({ date: -1 });
+    res.json(results);
+  } catch (error) {
+    console.error('Fetch results error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 
