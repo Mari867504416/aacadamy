@@ -1,7 +1,7 @@
 {
-  "name": "revenue-portal-backend",
+  "name": "aacadamy",
   "version": "1.0.0",
-  "description": "Backend for Revenue Portal",
+  "description": "aacadamy",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
