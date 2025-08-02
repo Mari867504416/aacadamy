@@ -20,13 +20,31 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI, {
+const mongoose = require('mongoose');
+
+const mongoURI = 'mongodb+srv://mariyappan9600:Vkx2CF1f2oBWZQKi@cluster0.hhpsrox.mongodb.net/mydatabase?retryWrites=true&w=majority';
+
+mongoose.connect(mongoURI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 15000 // optional: waits longer for MongoDB to respond
 })
-.then(() => console.log('✅ Connected to MongoDB'))
-.catch(err => console.error('❌ MongoDB connection error:', err));
+.then(() => {
+  console.log("✅ Connected to MongoDB");
+})
+.catch((err) => {
+  console.error("❌ MongoDB connection error:", err);
+});
+
+// Start server
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
 
 // Models
 const Admin = mongoose.model('Admin', new mongoose.Schema({
