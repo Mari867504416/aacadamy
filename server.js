@@ -16,28 +16,19 @@ app.use(express.json());
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // max requests per IP
+  max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
 
-// ✅ MongoDB Connection (ONLY ONCE)
-const mongoURI = 'mongodb+srv://mariyappan9600:Vkx2CF1f2oBWZQKi@cluster0.hhpsrox.mongodb.net/mydatabase?retryWrites=true&w=majority';
-
-mongoose.connect(mongoURI, {
+// MongoDB Connection
+mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 15000
+  useUnifiedTopology: true
 })
-.then(() => {
-  console.log("✅ Connected to MongoDB");
-  initializeAdmin(); // ✅ Only call this AFTER successful connection
-})
-.catch((err) => {
-  console.error("❌ MongoDB connection error:", err);
-  process.exit(1); // Optional: stop server on connection failure
-});
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
 
-// ✅ Models
+// Models
 const Admin = mongoose.model('Admin', new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true }
@@ -51,7 +42,9 @@ const Officer = mongoose.model('Officer', new mongoose.Schema({
     required: true, 
     unique: true,
     validate: {
-      validator: v => /^\d{10}$/.test(v),
+      validator: function(v) {
+        return /^\d{10}$/.test(v);
+      },
       message: props => `${props.value} is not a valid 10-digit mobile number!`
     }
   },
@@ -61,7 +54,9 @@ const Officer = mongoose.model('Officer', new mongoose.Schema({
   transactionId: { 
     type: String,
     validate: {
-      validator: v => !v || /^\d{12}$/.test(v),
+      validator: function(v) {
+        return !v || /^\d{12}$/.test(v);
+      },
       message: props => `${props.value} is not a valid 12-digit transaction ID!`
     },
     unique: true,
@@ -71,30 +66,269 @@ const Officer = mongoose.model('Officer', new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
-const Result = mongoose.model('Result', new mongoose.Schema({
-  username: { type: String, required: true },
-  name: String,
-  phone: String,
-  score: Number,
-  total: Number,
-  date: { type: Date, default: Date.now }
-}));
-
-// ✅ Initialize Default Admin
+// Initialize Admin
 async function initializeAdmin() {
   const adminExists = await Admin.exists({ username: 'admin' });
   if (!adminExists) {
     const hashedPassword = await bcrypt.hash('admin123', 10);
     await Admin.create({ username: 'admin', password: hashedPassword });
-    console.log('✅ Default admin created (username: admin, password: admin123)');
+    console.log('Default admin created');
   }
 }
 
-// ... [KEEP ALL YOUR ROUTES UNCHANGED HERE] ...
+// Routes
 
-// ✅ Start Server (ONLY ONCE)
+// Admin Login
+app.post('/admin/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const admin = await Admin.findOne({ username });
+    
+    if (!admin) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    res.json({ message: 'Admin login successful' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Officer Login
+app.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const officer = await Officer.findOne({ username });
+    
+    if (!officer) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const isMatch = await bcrypt.compare(password, officer.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const officerData = officer.toObject();
+    delete officerData.password;
+    
+    res.json({ 
+      message: 'Login successful',
+      officer: officerData,
+      subscribed: officer.subscribed
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Officer Signup
+app.post('/signup', async (req, res) => {
+  try {
+    const { name, address, mobile, username, password } = req.body;
+    
+    if (!/^\d{10}$/.test(mobile)) {
+      return res.status(400).json({ error: 'Invalid mobile number' });
+    }
+    
+    const existingOfficer = await Officer.findOne({ $or: [{ username }, { mobile }] });
+    if (existingOfficer) {
+      return res.status(400).json({ error: 'Username or mobile number already exists' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newOfficer = await Officer.create({
+      name,
+      address,
+      mobile,
+      username,
+      password: hashedPassword
+    });
+    
+    const officerData = newOfficer.toObject();
+    delete officerData.password;
+    
+    res.json({ 
+      message: 'Officer created successfully',
+      officer: officerData
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Submit Transaction ID
+const transactionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many transaction submissions, please try again later'
+});
+
+app.post('/submit-transaction', transactionLimiter, async (req, res) => {
+  try {
+    const { transactionId, username } = req.body;
+    
+    if (!transactionId || !username) {
+      return res.status(400).json({ error: 'Transaction ID and username are required' });
+    }
+    
+    if (!/^\d{12}$/.test(transactionId)) {
+      return res.status(400).json({ error: 'Transaction ID must be exactly 12 digits' });
+    }
+    
+    // Check if transaction ID already exists
+    const existingTransaction = await Officer.findOne({ transactionId });
+    if (existingTransaction) {
+      return res.status(400).json({ error: 'This transaction ID has already been used' });
+    }
+    
+    const updatedOfficer = await Officer.findOneAndUpdate(
+      { username },
+      { 
+        transactionId,
+        subscriptionDate: new Date(),
+        subscribed: false // Ensure subscribed is false until admin activates
+      },
+      { new: true }
+    );
+    
+    if (!updatedOfficer) {
+      return res.status(404).json({ error: 'Officer not found' });
+    }
+    
+    res.json({ 
+      message: 'Transaction submitted successfully',
+      transactionId: updatedOfficer.transactionId
+    });
+    
+  } catch (error) {
+    console.error('Transaction submission error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Admin - Get all officers
+app.get('/admin/officers', async (req, res) => {
+  try {
+    const officers = await Officer.find({}, { password: 0 })
+      .sort({ createdAt: -1 }); // Sort by newest first
+    res.json(officers);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin - Activate subscription
+app.post('/admin/activate', async (req, res) => {
+  try {
+    const { transactionId } = req.body;
+    console.log("Received transactionId:", transactionId);
+
+    // Validate format (12-digit number)
+    if (!transactionId || !/^\d{12}$/.test(transactionId)) {
+      return res.status(400).json({ error: 'Invalid or missing 12-digit transaction ID' });
+    }
+
+    // Find the officer by transactionId
+    const officer = await Officer.findOne({ transactionId });
+    if (!officer) {
+      return res.status(404).json({ error: 'No officer found with this transaction ID' });
+    }
+    console.log("Officer found:", officer.username);
+
+    if (officer.subscribed) {
+      return res.status(400).json({ error: 'Officer is already subscribed' });
+    }
+
+    // Activate the officer (keep transactionId to avoid unique null conflicts)
+    officer.subscribed = true;
+    officer.subscriptionDate = new Date();
+
+    await officer.save();
+    console.log("Officer activated successfully:", officer.username);
+
+    res.json({ message: 'Subscription activated successfully' });
+  } catch (error) {
+    console.error('Activation error:', error);
+    res.status(500).json({ error: 'Internal server error during activation' });
+  }
+});
+
+
+
+
+// Admin - Reset password
+app.post('/admin/reset-password', async (req, res) => {
+  try {
+    const { password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    await Admin.findOneAndUpdate(
+      { username: 'admin' },
+      { password: hashedPassword }
+    );
+    
+    res.json({ message: 'Admin password updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Initialize admin on startup
+initializeAdmin();
+
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  initializeAdmin(); // Initialize admin AFTER server starts
+  console.log(`Server running on port ${PORT}`);
+});
+app.post('/officer/status', async (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+
+    const officer = await Officer.findOne({ username });
+
+    if (!officer) {
+      return res.status(404).json({ error: 'Officer not found' });
+    }
+
+    res.json({ activated: officer.subscribed });
+  } catch (error) {
+    console.error('Error checking activation status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+// Officer - Reset password via username and mobile number
+app.post('/officer/reset-password', async (req, res) => {
+  try {
+    const { username, mobile, password } = req.body;
+
+    if (!username || !mobile || !password) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    const officer = await Officer.findOne({ username, mobile });
+
+    if (!officer) {
+      return res.status(404).json({ error: 'Officer not found or mobile number does not match' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    officer.password = hashedPassword;
+    await officer.save();
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Officer password reset error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
