@@ -30,10 +30,11 @@ mongoose.connect(mongoURI, {
 })
 .then(() => {
   console.log("✅ Connected to MongoDB");
+  initializeAdmin(); // ✅ Only call this AFTER successful connection
 })
 .catch((err) => {
   console.error("❌ MongoDB connection error:", err);
-  process.exit(1);
+  process.exit(1); // Optional: stop server on connection failure
 });
 
 // ✅ Models
