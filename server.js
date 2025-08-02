@@ -20,33 +20,23 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-const mongoose = require('mongoose');
-
+// ✅ MongoDB Connection (ONLY ONCE)
 const mongoURI = 'mongodb+srv://mariyappan9600:Vkx2CF1f2oBWZQKi@cluster0.hhpsrox.mongodb.net/mydatabase?retryWrites=true&w=majority';
 
 mongoose.connect(mongoURI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 15000 // optional: waits longer for MongoDB to respond
+  serverSelectionTimeoutMS: 15000
 })
 .then(() => {
   console.log("✅ Connected to MongoDB");
 })
 .catch((err) => {
   console.error("❌ MongoDB connection error:", err);
+  process.exit(1);
 });
 
-// Start server
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
-
-
-// Models
+// ✅ Models
 const Admin = mongoose.model('Admin', new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true }
@@ -89,7 +79,7 @@ const Result = mongoose.model('Result', new mongoose.Schema({
   date: { type: Date, default: Date.now }
 }));
 
-// Initialize Default Admin
+// ✅ Initialize Default Admin
 async function initializeAdmin() {
   const adminExists = await Admin.exists({ username: 'admin' });
   if (!adminExists) {
@@ -99,234 +89,11 @@ async function initializeAdmin() {
   }
 }
 
-// Routes
+// ... [KEEP ALL YOUR ROUTES UNCHANGED HERE] ...
 
-// Admin Login
-app.post('/admin/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const admin = await Admin.findOne({ username });
-
-    if (!admin || !(await bcrypt.compare(password, admin.password))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    res.json({ message: 'Admin login successful' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Officer Login
-app.post('/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const officer = await Officer.findOne({ username });
-
-    if (!officer || !(await bcrypt.compare(password, officer.password))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const officerData = officer.toObject();
-    delete officerData.password;
-
-    res.json({ 
-      message: 'Login successful',
-      officer: officerData,
-      subscribed: officer.subscribed
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Officer Signup
-app.post('/signup', async (req, res) => {
-  try {
-    const { name, address, mobile, username, password } = req.body;
-
-    if (!/^\d{10}$/.test(mobile)) {
-      return res.status(400).json({ error: 'Invalid mobile number' });
-    }
-
-    const existing = await Officer.findOne({ $or: [{ username }, { mobile }] });
-    if (existing) {
-      return res.status(400).json({ error: 'Username or mobile number already exists' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newOfficer = await Officer.create({
-      name, address, mobile, username, password: hashedPassword
-    });
-
-    const officerData = newOfficer.toObject();
-    delete officerData.password;
-
-    res.json({ message: 'Officer created successfully', officer: officerData });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Submit Transaction ID
-const transactionLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: 'Too many transaction submissions, try again later'
-});
-
-app.post('/submit-transaction', transactionLimiter, async (req, res) => {
-  try {
-    const { transactionId, username } = req.body;
-
-    if (!transactionId || !/^\d{12}$/.test(transactionId)) {
-      return res.status(400).json({ error: 'Invalid or missing 12-digit transaction ID' });
-    }
-
-    const exists = await Officer.findOne({ transactionId });
-    if (exists) {
-      return res.status(400).json({ error: 'Transaction ID already used' });
-    }
-
-    const officer = await Officer.findOneAndUpdate(
-      { username },
-      { transactionId, subscriptionDate: new Date(), subscribed: false },
-      { new: true }
-    );
-
-    if (!officer) return res.status(404).json({ error: 'Officer not found' });
-
-    res.json({ message: 'Transaction submitted successfully', transactionId: officer.transactionId });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Officer Activation Status
-app.post('/officer/status', async (req, res) => {
-  try {
-    const { username } = req.body;
-    const officer = await Officer.findOne({ username });
-
-    if (!officer) {
-      return res.status(404).json({ error: 'Officer not found' });
-    }
-
-    res.json({ activated: officer.subscribed });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Officer Reset Password
-app.post('/officer/reset-password', async (req, res) => {
-  try {
-    const { username, mobile, password } = req.body;
-    const officer = await Officer.findOne({ username, mobile });
-
-    if (!officer) {
-      return res.status(404).json({ error: 'Officer not found or mobile mismatch' });
-    }
-
-    officer.password = await bcrypt.hash(password, 10);
-    await officer.save();
-
-    res.json({ message: 'Password reset successful' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Admin - Get Officers
-app.get('/admin/officers', async (req, res) => {
-  try {
-    const officers = await Officer.find({}, { password: 0 }).sort({ createdAt: -1 });
-    res.json(officers);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Admin - Activate Subscription
-app.post('/admin/activate', async (req, res) => {
-  try {
-    const { transactionId } = req.body;
-
-    if (!transactionId || !/^\d{12}$/.test(transactionId)) {
-      return res.status(400).json({ error: 'Invalid transaction ID' });
-    }
-
-    const officer = await Officer.findOne({ transactionId });
-    if (!officer) {
-      return res.status(404).json({ error: 'Officer not found' });
-    }
-
-    if (officer.subscribed) {
-      return res.status(400).json({ error: 'Already subscribed' });
-    }
-
-    officer.subscribed = true;
-    officer.subscriptionDate = new Date();
-    await officer.save();
-
-    res.json({ message: 'Subscription activated successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Admin - Reset Admin Password
-app.post('/admin/reset-password', async (req, res) => {
-  try {
-    const { password } = req.body;
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await Admin.findOneAndUpdate({ username: 'admin' }, { password: hashedPassword });
-    res.json({ message: 'Admin password updated' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Submit Quiz Result
-app.post('/submit-result', async (req, res) => {
-  try {
-    const { username, name, phone, score, total, date } = req.body;
-
-    if (!username || score == null || total == null) {
-      return res.status(400).json({ error: 'Missing fields' });
-    }
-
-    const result = new Result({
-      username,
-      name: name || "Unknown",
-      phone: phone || "Not Provided",
-      score,
-      total,
-      date: date ? new Date(date) : new Date()
-    });
-
-    await result.save();
-    res.json({ message: 'Result submitted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Get All Results
-app.get('/get-results', async (req, res) => {
-  try {
-    const results = await Result.find().sort({ date: -1 });
-    res.json(results);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Start Server
+// ✅ Start Server (ONLY ONCE)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  initializeAdmin(); // Initialize admin AFTER server starts
 });
-
-// Initialize admin on server start
-initializeAdmin();
